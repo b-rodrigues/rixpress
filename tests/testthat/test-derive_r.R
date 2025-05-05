@@ -498,8 +498,8 @@ test_that("rxp_r_file: with env_var parameter", {
   write.csv(mtcars[1:5, ], csv_file, row.names = FALSE)
 
   d1 <- rxp_r_file(
-    mtcars_data, 
-    path = csv_file, 
+    mtcars_data,
+    path = csv_file,
     read_function = read.csv,
     env_var = c(R_DATA_DIR = "/path/to/data", R_DEBUG = "TRUE")
   )
@@ -534,8 +534,8 @@ test_that("rxp_py_file: with env_var parameter", {
   write.csv(mtcars[1:5, ], csv_file, row.names = FALSE)
 
   d1 <- rxp_py_file(
-    mtcars_data, 
-    path = csv_file, 
+    mtcars_data,
+    path = csv_file,
     read_function = "pandas.read_csv",
     env_var = c(PYTHONPATH = "/custom/modules", PYTHON_DEBUG = "1")
   )
@@ -576,7 +576,10 @@ test_that("rxp_rmd: with env_var parameter", {
     report,
     rmd_file,
     additional_files = "images",
-    env_var = c(RSTUDIO_PANDOC = "/usr/local/bin/pandoc", R_LIBS_USER = "/custom/r/libs")
+    env_var = c(
+      RSTUDIO_PANDOC = "/usr/local/bin/pandoc",
+      R_LIBS_USER = "/custom/r/libs"
+    )
   )
 
   # Test the entire object
@@ -599,7 +602,10 @@ test_that("rxp_rmd: with env_var parameter", {
         "additional_files" = "images",
         "nix_env" = "default.nix",
         "params" = NULL,
-        "env_var" = c(RSTUDIO_PANDOC = "/usr/local/bin/pandoc", R_LIBS_USER = "/custom/r/libs")
+        "env_var" = c(
+          RSTUDIO_PANDOC = "/usr/local/bin/pandoc",
+          R_LIBS_USER = "/custom/r/libs"
+        )
       ),
       class = "derivation"
     )
