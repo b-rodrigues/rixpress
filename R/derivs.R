@@ -105,7 +105,8 @@ rxp_r <- function(
   nix_env = "default.nix",
   serialize_function = NULL,
   unserialize_function = NULL,
-  env_var = NULL
+  env_var = NULL,
+  user_functions = NULL
 ) {
   out_name <- deparse1(substitute(name))
   expr_str <- deparse1(substitute(expr))
@@ -130,8 +131,9 @@ rxp_r <- function(
     env_exports <- paste(
       vapply(
         names(env_var),
-        function(var_name)
-          sprintf("export %s=%s", var_name, env_var[[var_name]]),
+        function(var_name) {
+          sprintf("export %s=%s", var_name, env_var[[var_name]])
+        },
         character(1)
       ),
       collapse = "\n      "
@@ -142,25 +144,46 @@ rxp_r <- function(
   }
 
   # Prepare the fileset for src
-  # Remove functions.R as this is handled separately
-  fileset_parts <- setdiff(additional_files, "functions.R")
-  fileset_parts <- fileset_parts[nzchar(fileset_parts)]
+  # Combine additional_files and user_functions, but exclude user_functions from copy commands
+  all_files <- c(additional_files, user_functions)
+  fileset_parts <- all_files[nzchar(all_files)]
 
-  # build copy command for additional files
+  # build copy command for additional files only (not user_functions)
   copy_cmd <- ""
-  if (length(fileset_parts) > 0) {
-    copy_lines <- vapply(
-      fileset_parts,
-      function(f) sprintf("cp -r ${./%s} %s", f, f),
-      character(1)
-    )
-    copy_cmd <- paste0(paste(copy_lines, collapse = "\n      "), "\n      ")
+  if (length(additional_files) > 0) {
+    additional_files_clean <- additional_files[nzchar(additional_files)]
+    if (length(additional_files_clean) > 0) {
+      copy_lines <- vapply(
+        additional_files_clean,
+        function(f) sprintf("cp -r ${./%s} %s", f, f),
+        character(1)
+      )
+      copy_cmd <- paste0(paste(copy_lines, collapse = "\n      "), "\n      ")
+    }
+  }
+
+  # Generate source commands for user_functions
+  source_cmd <- ""
+  if (!is.null(user_functions) && length(user_functions) > 0) {
+    user_functions_clean <- user_functions[nzchar(user_functions)]
+    if (length(user_functions_clean) > 0) {
+      source_lines <- vapply(
+        user_functions_clean,
+        function(f) sprintf("source('%s')", f),
+        character(1)
+      )
+      source_cmd <- paste0(
+        paste(source_lines, collapse = "\n        "),
+        "\n        "
+      )
+    }
   }
 
   build_phase <- sprintf(
-    "%s%sRscript -e \"\n        source('libraries.R')\n        %s <- %s\n        %s(%s, '%s')\"",
+    "%s%sRscript -e \"\n        source('libraries.R')\n        %s%s <- %s\n        %s(%s, '%s')\"",
     env_exports,
     copy_cmd,
+    source_cmd,
     out_name,
     expr_str,
     serialize_str,
@@ -198,11 +221,11 @@ rxp_r <- function(
     nix_env = nix_env,
     serialize_function = serialize_str,
     unserialize_function = unserialize_str,
-    env_var = env_var
+    env_var = env_var,
+    user_functions = user_functions
   ) |>
     structure(class = "derivation")
 }
-
 
 #' Create a Nix expression running a Python function
 #'
@@ -270,8 +293,9 @@ rxp_py <- function(
       out_name
     )
   } else {
-    if (!is.character(serialize_function))
+    if (!is.character(serialize_function)) {
       stop("serialize_function must be a character string or NULL")
+    }
     serialize_str <- sprintf(
       "%s(globals()['%s'], '%s')",
       serialize_function,
@@ -284,8 +308,9 @@ rxp_py <- function(
   if (is.null(unserialize_function)) {
     unserialize_str <- "pickle.load"
   } else {
-    if (!is.character(unserialize_function))
+    if (!is.character(unserialize_function)) {
       stop("unserialize_function must be a character string or NULL")
+    }
     unserialize_str <- unserialize_function
   }
 
@@ -421,12 +446,14 @@ rxp_qmd <- function(
     } else {
       pattern <- sprintf("((?:rixpress::)?%s)\\('([^']+)'\\)", func_name)
     }
-    
+
     matches <- gregexpr(pattern, content_str)
     full_matches <- regmatches(content_str, matches)[[1]]
-    
-    if (length(full_matches) == 0) return(data.frame())
-    
+
+    if (length(full_matches) == 0) {
+      return(data.frame())
+    }
+
     results <- data.frame(
       full_match = character(0),
       func_call = character(0),
@@ -434,25 +461,40 @@ rxp_qmd <- function(
       quote_char = character(0),
       stringsAsFactors = FALSE
     )
-    
+
     for (match in full_matches) {
       if (quote_char == '"') {
-        parts <- regmatches(match, regexec(sprintf('((?:rixpress::)?%s)\\("([^"]+)"\\)', func_name), match))[[1]]
+        parts <- regmatches(
+          match,
+          regexec(
+            sprintf('((?:rixpress::)?%s)\\("([^"]+)"\\)', func_name),
+            match
+          )
+        )[[1]]
       } else {
-        parts <- regmatches(match, regexec(sprintf("((?:rixpress::)?%s)\\('([^']+)'\\)", func_name), match))[[1]]
+        parts <- regmatches(
+          match,
+          regexec(
+            sprintf("((?:rixpress::)?%s)\\('([^']+)'\\)", func_name),
+            match
+          )
+        )[[1]]
       }
-      
+
       if (length(parts) == 3) {
-        results <- rbind(results, data.frame(
-          full_match = parts[1],
-          func_call = parts[2],
-          path = parts[3],
-          quote_char = quote_char,
-          stringsAsFactors = FALSE
-        ))
+        results <- rbind(
+          results,
+          data.frame(
+            full_match = parts[1],
+            func_call = parts[2],
+            path = parts[3],
+            quote_char = quote_char,
+            stringsAsFactors = FALSE
+          )
+        )
       }
     }
-    
+
     results
   }
 
@@ -463,28 +505,33 @@ rxp_qmd <- function(
   load_matches_single <- extract_actual_matches('rxp_load', "'")
 
   # Combine all matches
-  all_matches <- rbind(read_matches_double, read_matches_single, load_matches_double, load_matches_single)
-  
+  all_matches <- rbind(
+    read_matches_double,
+    read_matches_single,
+    load_matches_double,
+    load_matches_single
+  )
+
   # Get unique paths for environment variables
   all_refs <- unique(all_matches$path)
 
   # Generate substitution commands based on actual matches
   sub_cmds <- character(0)
-  
+
   if (nrow(all_matches) > 0) {
     for (i in 1:nrow(all_matches)) {
       match <- all_matches[i, ]
-      
+
       # Build the search pattern
       if (match$quote_char == '"') {
         search_pattern <- sprintf('%s("%s")', match$func_call, match$path)
       } else {
         search_pattern <- sprintf("%s('%s')", match$func_call, match$path)
       }
-      
+
       # Build replacement based on function type
       is_load <- grepl("rxp_load", match$func_call)
-      
+
       # Determine the correct function name to use in replacement
       # If original had namespace, preserve it for rxp_read
       if (grepl("rixpress::", match$func_call)) {
@@ -492,20 +539,25 @@ rxp_qmd <- function(
       } else {
         rxp_read_func <- "rxp_read"
       }
-      
+
       if (is_load) {
-        replacement <- sprintf('%s <- %s("${%s}")', match$path, rxp_read_func, match$path)
+        replacement <- sprintf(
+          '%s <- %s("${%s}")',
+          match$path,
+          rxp_read_func,
+          match$path
+        )
       } else {
         replacement <- sprintf('%s("${%s}")', rxp_read_func, match$path)
       }
-      
+
       cmd <- sprintf(
         "substituteInPlace %s --replace-fail '%s' '%s'",
         qmd_file,
         search_pattern,
         replacement
       )
-      
+
       sub_cmds <- c(sub_cmds, cmd)
     }
   }
@@ -516,8 +568,9 @@ rxp_qmd <- function(
     env_exports <- paste(
       vapply(
         names(env_var),
-        function(var_name)
-          sprintf("      export %s=%s", var_name, env_var[[var_name]]),
+        function(var_name) {
+          sprintf("      export %s=%s", var_name, env_var[[var_name]])
+        },
         character(1)
       ),
       collapse = "\n"
@@ -532,8 +585,11 @@ rxp_qmd <- function(
     "      export HOME=$PWD/home",
     "      export RETICULATE_PYTHON=${defaultPkgs.python3}/bin/python",
     env_exports,
-    if (length(sub_cmds) > 0)
-      paste("      ", sub_cmds, sep = "", collapse = "\n") else "",
+    if (length(sub_cmds) > 0) {
+      paste("      ", sub_cmds, sep = "", collapse = "\n")
+    } else {
+      ""
+    },
     sprintf("      quarto render %s %s --output-dir $out", qmd_file, args),
     sep = "\n"
   )
@@ -642,8 +698,9 @@ rxp_file_common <- function(
     env_exports <- paste(
       vapply(
         names(env_var),
-        function(var_name)
-          sprintf("export %s=%s", var_name, env_var[[var_name]]),
+        function(var_name) {
+          sprintf("export %s=%s", var_name, env_var[[var_name]])
+        },
         character(1)
       ),
       collapse = "\n      "
@@ -1097,8 +1154,9 @@ rxp_rmd <- function(
     env_exports <- paste(
       vapply(
         names(env_var),
-        function(var_name)
-          sprintf("      export %s=%s", var_name, env_var[[var_name]]),
+        function(var_name) {
+          sprintf("      export %s=%s", var_name, env_var[[var_name]])
+        },
         character(1)
       ),
       collapse = "\n"
@@ -1113,8 +1171,11 @@ rxp_rmd <- function(
     "      export HOME=$PWD/home",
     "      export RETICULATE_PYTHON=${defaultPkgs.python3}/bin/python",
     env_exports,
-    if (length(sub_cmds) > 0)
-      paste("      ", sub_cmds, sep = "", collapse = "\n") else "",
+    if (length(sub_cmds) > 0) {
+      paste("      ", sub_cmds, sep = "", collapse = "\n")
+    } else {
+      ""
+    },
     sprintf("      Rscript -e \"rmd_file <- '%s'; %s\"", rmd_file, render_args),
     sep = "\n"
   )
@@ -1179,16 +1240,41 @@ print.derivation <- function(x, ...) {
   }
   cat(
     "Additional files:",
-    if (length(x$additional_files) == 0 || x$additional_files == "") "None" else
-      paste(x$additional_files, collapse = ", "),
+    if (
+      is.null(x$additional_files) ||
+        length(x$additional_files) == 0 ||
+        all(x$additional_files == "")
+    ) {
+      "None"
+    } else {
+      paste(x$additional_files, collapse = ", ")
+    },
     "\n"
   )
+  if ("user_functions" %in% names(x)) {
+    cat(
+      "User functions:",
+      if (
+        is.null(x$user_functions) ||
+          length(x$user_functions) == 0 ||
+          all(x$user_functions == "")
+      ) {
+        "None"
+      } else {
+        paste(x$user_functions, collapse = ", ")
+      },
+      "\n"
+    )
+  }
   cat("Nix env:", x$nix_env, "\n")
   if ("env_var" %in% names(x)) {
     cat(
       "Env variables:",
-      if (is.null(x$env_var)) "None" else
-        paste(names(x$env_var), x$env_var, sep = "=", collapse = ", "),
+      if (is.null(x$env_var)) {
+        "None"
+      } else {
+        paste(names(x$env_var), x$env_var, sep = "=", collapse = ", ")
+      },
       "\n"
     )
   }
@@ -1367,8 +1453,11 @@ rxp_jl <- function(
     type = "rxp_jl",
     additional_files = additional_files,
     nix_env = nix_env,
-    serialize_function = if (is.null(serialize_function))
-      "Serialization.serialize" else serialize_function,
+    serialize_function = if (is.null(serialize_function)) {
+      "Serialization.serialize"
+    } else {
+      serialize_function
+    },
     unserialize_function = unserialize_str,
     env_var = env_var
   ) |>
